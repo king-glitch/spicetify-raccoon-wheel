@@ -526,7 +526,7 @@ async function main(): Promise<void> {
     console.log("[Raccoon-Wheel] Extension loaded.");
 
     // Create Settings UI
-    settings.addDropDown("raccoonwheel-webm-selection", "Select Video", ["Husky", "Pedro", "Custom"], 0);
+    settings.addDropDown("raccoonwheel-webm-selection", "Select Video", Object.keys(VIDEO_OPTIONS), 0);
     settings.addInput("raccoonwheel-webm-link", "Custom webM video URL (Only used when 'Custom' is selected)", "");
     settings.addInput("raccoonwheel-webm-bpm", "Custom default BPM of webM video (Example: 213)", "");
     settings.addDropDown("raccoonwheel-webm-position", "Position where webM video should be rendered", ["Bottom", "Main"], 1);
