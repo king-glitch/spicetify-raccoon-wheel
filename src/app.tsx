@@ -31,7 +31,7 @@ interface AudioFeatures {
 
 const DEFAULT_VIDEO_BPM = 130;
 const DEFAULT_VIDEO_SIZE = 100;
-const DEFAULT_VIDEO_URL = "https://github.com/king-glitch/spicetify-raccoon-wheel/raw/main/resources/husky.webm";
+const DEFAULT_VIDEO_URL = "https://github.com/king-glitch/spicetify-raccoon-wheel/raw/main/resources/husky.gif";
 const VIDEO_ELEMENT_ID = "raccoonwheel-webm";
 
 const SELECTORS = {
