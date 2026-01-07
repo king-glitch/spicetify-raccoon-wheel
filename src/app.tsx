@@ -42,7 +42,7 @@ const SELECTORS = {
 
 const STYLES = {
     BOTTOM_PLAYER: "width: 56px; height: 56px; position: absolute; z-index: 10; pointer-events: none; left: 0;",
-    getMainCoverArt: (size: number, width?: string) => `width: ${width || size + "%"}; position: absolute; pointer-events: none; z-index: 10;`,
+    getMainCoverArt: (size: number, width?: string, height?: string) => `width: ${width || size + "%"}; height: ${height || "auto"}; object-fit: contain; position: absolute; pointer-events: none; z-index: 10;`,
 } as const;
 
 // ============================================================================
@@ -123,32 +123,34 @@ async function fetchAudioData(retryDelay = 200, maxRetries = 10): Promise<AudioD
  * Synchronizes video playback timing with the music's beats
  */
 async function syncTiming(startTime: number, progress: number): Promise<void> {
-    const videoElement = document.getElementById(VIDEO_ELEMENT_ID) as HTMLVideoElement | null;
-    if (videoElement) {
-        if (Spicetify.Player.isPlaying()) {
-            const progressInSeconds = progress / 1000;
+    const mediaElement = document.getElementById(VIDEO_ELEMENT_ID);
+    if (mediaElement) {
+        if (mediaElement instanceof HTMLVideoElement) {
+            if (Spicetify.Player.isPlaying()) {
+                const progressInSeconds = progress / 1000;
 
-            if (globalAudioData?.beats) {
-                const upcomingBeat = globalAudioData.beats.find((beat: Beat) => beat.start > progressInSeconds);
-                if (upcomingBeat) {
-                    const operationTime = performance.now() - startTime;
-                    const delayUntilNextBeat = Math.max(0, (upcomingBeat.start - progressInSeconds) * 1000 - operationTime);
-                    
-                    setTimeout(() => {
-                        videoElement.currentTime = 0;
-                        videoElement.play();
-                    }, delayUntilNextBeat);
+                if (globalAudioData?.beats) {
+                    const upcomingBeat = globalAudioData.beats.find((beat: Beat) => beat.start > progressInSeconds);
+                    if (upcomingBeat) {
+                        const operationTime = performance.now() - startTime;
+                        const delayUntilNextBeat = Math.max(0, (upcomingBeat.start - progressInSeconds) * 1000 - operationTime);
+                        
+                        setTimeout(() => {
+                            mediaElement.currentTime = 0;
+                            mediaElement.play();
+                        }, delayUntilNextBeat);
+                    } else {
+                        mediaElement.currentTime = 0;
+                        mediaElement.play();
+                    }
+                    console.log("[Raccoon-Wheel] Resynchronized to nearest beat");
                 } else {
-                    videoElement.currentTime = 0;
-                    videoElement.play();
+                    mediaElement.currentTime = 0;
+                    mediaElement.play();
                 }
-                console.log("[Raccoon-Wheel] Resynchronized to nearest beat");
             } else {
-                videoElement.currentTime = 0;
-                videoElement.play();
+                mediaElement.pause();
             }
-        } else {
-            videoElement.pause();
         }
     } else {
         createWebMVideo();
@@ -205,11 +207,12 @@ async function createWebMVideo(): Promise<void> {
              // For main position, try to get the container width
              const mainCoverArtContainer = document.querySelector(SELECTORS.MAIN_COVER_ART_CONTAINER);
              const containerWidth = mainCoverArtContainer ? mainCoverArtContainer.clientWidth : null;
-             // If we found the container width, use that (scaled by the size setting if needed, though usually just width is enough)
-             // The user requested to use the width of the container. 
-             // Note: clientWidth is a number (pixels).
+             
+             // If we found the container width, use that to constrain the video to a square
              const widthStyle = containerWidth ? `${containerWidth}px` : undefined;
-             elementStyles = STYLES.getMainCoverArt(mainCoverArtVideoSize, widthStyle);
+             const heightStyle = containerWidth ? `${containerWidth}px` : undefined;
+             
+             elementStyles = STYLES.getMainCoverArt(mainCoverArtVideoSize, widthStyle, heightStyle);
         }
 
         const targetElement = await waitForElement(targetElementSelector);
@@ -219,17 +222,28 @@ async function createWebMVideo(): Promise<void> {
             videoURL = DEFAULT_VIDEO_URL;
         }
 
-        // Create a new video element to be inserted
-        const videoElement = document.createElement("video");
-        videoElement.setAttribute("loop", "true");
-        videoElement.setAttribute("autoplay", "true");
-        videoElement.setAttribute("muted", "true");
-        videoElement.src = videoURL;
-        videoElement.id = VIDEO_ELEMENT_ID;
-        videoElement.style.cssText = elementStyles;
+        const isGif = videoURL.toLowerCase().endsWith(".gif");
+
+        // Create a new media element to be inserted
+        let mediaElement: HTMLElement;
+        if (isGif) {
+            mediaElement = document.createElement("img");
+        } else {
+            mediaElement = document.createElement("video");
+            (mediaElement as HTMLVideoElement).setAttribute("loop", "true");
+            (mediaElement as HTMLVideoElement).setAttribute("autoplay", "true");
+            (mediaElement as HTMLVideoElement).setAttribute("muted", "true");
+        }
+
+        (mediaElement as HTMLMediaElement).src = videoURL;
+        mediaElement.id = VIDEO_ELEMENT_ID;
+        mediaElement.style.cssText = elementStyles;
 
         globalAudioData = await fetchAudioData();
-        videoElement.playbackRate = await getPlaybackRate(globalAudioData);
+        
+        if (mediaElement instanceof HTMLVideoElement) {
+            mediaElement.playbackRate = await getPlaybackRate(globalAudioData);
+        }
 
         // Remove any existing video element to avoid duplicates
         // Check this AFTER waiting/fetching so we don't remove it while fetching
@@ -242,17 +256,19 @@ async function createWebMVideo(): Promise<void> {
         if (isBottomPosition) {
             const firstChild = targetElement.firstChild as Element | null;
             if (firstChild) {
-                targetElement.insertBefore(videoElement, firstChild);
+                targetElement.insertBefore(mediaElement, firstChild);
             }
         } else {
-            targetElement.insertBefore(videoElement, targetElement.firstChild);
+            targetElement.insertBefore(mediaElement, targetElement.firstChild);
         }
         
         // Control video playback based on whether Spotify is currently playing music
-        if (Spicetify.Player.isPlaying()) {
-            videoElement.play();
-        } else {
-            videoElement.pause();
+        if (mediaElement instanceof HTMLVideoElement) {
+            if (Spicetify.Player.isPlaying()) {
+                mediaElement.play();
+            } else {
+                mediaElement.pause();
+            }
         }
     } catch (error) {
         console.error("[Raccoon-Wheel] Could not create raccoon-wheel video element: ", error);
@@ -387,27 +403,29 @@ async function main(): Promise<void> {
         const startTime = performance.now();
         lastProgress = Spicetify.Player.getProgress();
 
-        const videoElement = document.getElementById(VIDEO_ELEMENT_ID) as HTMLVideoElement | null;
-        if (videoElement) {
+        const mediaElement = document.getElementById(VIDEO_ELEMENT_ID);
+        if (mediaElement) {
             globalAudioData = await fetchAudioData();
             console.log("[Raccoon-Wheel] Audio data fetched:", globalAudioData);
             
-            if (globalAudioData?.beats && globalAudioData.beats.length > 0) {
-                const firstBeatStart = globalAudioData.beats[0].start;
-                
-                videoElement.playbackRate = await getPlaybackRate(globalAudioData);
+            if (mediaElement instanceof HTMLVideoElement) {
+                if (globalAudioData?.beats && globalAudioData.beats.length > 0) {
+                    const firstBeatStart = globalAudioData.beats[0].start;
+                    
+                    mediaElement.playbackRate = await getPlaybackRate(globalAudioData);
 
-                const operationTime = performance.now() - startTime;
-                const delayUntilFirstBeat = Math.max(0, firstBeatStart * 1000 - operationTime);
+                    const operationTime = performance.now() - startTime;
+                    const delayUntilFirstBeat = Math.max(0, firstBeatStart * 1000 - operationTime);
 
-                setTimeout(() => {
-                    videoElement.currentTime = 0;
-                    videoElement.play();
-                }, delayUntilFirstBeat);
-            } else {
-                videoElement.playbackRate = await getPlaybackRate(globalAudioData);
-                videoElement.currentTime = 0;
-                videoElement.play();
+                    setTimeout(() => {
+                        mediaElement.currentTime = 0;
+                        mediaElement.play();
+                    }, delayUntilFirstBeat);
+                } else {
+                    mediaElement.playbackRate = await getPlaybackRate(globalAudioData);
+                    mediaElement.currentTime = 0;
+                    mediaElement.play();
+                }
             }
         } else {
             createWebMVideo();
