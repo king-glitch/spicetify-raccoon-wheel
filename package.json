@@ -7,7 +7,7 @@
     "watch": "spicetify-creator --watch",
     "apply": "spicetify config extensions raccoon-wheel.js && spicetify apply",
     "push": "cp -r dist/raccoon-wheel.js ~/.config/spicetify/Extensions/",
-    "build-and-push": "bun run build && bun run push"
+    "build-and-push": "bun run build && bun run push && bun run apply"
   },
   "license": "MIT",
   "devDependencies": {
