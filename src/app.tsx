@@ -36,12 +36,13 @@ const VIDEO_ELEMENT_ID = "raccoonwheel-webm";
 
 const SELECTORS = {
     BOTTOM_PLAYER: ".main-nowPlayingWidget-coverArt",
-    MAIN_COVER_ART: ".cover-art-auto-height",
+    MAIN_COVER_ART: ".main-nowPlayingView-coverArt",
+    MAIN_COVER_ART_CONTAINER: ".main-nowPlayingView-coverArtContainer",
 } as const;
 
 const STYLES = {
     BOTTOM_PLAYER: "width: 56px; height: 56px; position: absolute; z-index: 10; pointer-events: none; left: 0;",
-    getMainCoverArt: (size: number) => `width: ${size}%; position: absolute; pointer-events: none; z-index: 10;`,
+    getMainCoverArt: (size: number, width?: string) => `width: ${width || size + "%"}; position: absolute; pointer-events: none; z-index: 10;`,
 } as const;
 
 // ============================================================================
@@ -50,6 +51,7 @@ const STYLES = {
 
 const settings = new SettingsSection("Raccoon-Wheel Settings", "raccoonwheel-settings");
 let globalAudioData: AudioData | null = null;
+let isCreatingVideo = false;
 
 // ============================================================================
 // BPM & Playback Functions
@@ -182,13 +184,10 @@ async function waitForElement(selector: string, maxAttempts = 50, interval = 100
  * Creates the WebM video element and sets initial BPM and play state
  */
 async function createWebMVideo(): Promise<void> {
+    if (isCreatingVideo) return;
+    isCreatingVideo = true;
+
     try {
-        // Remove any existing video element to avoid duplicates
-        const existingVideo = document.getElementById(VIDEO_ELEMENT_ID);
-        if (existingVideo) {
-            existingVideo.remove();
-        }
-        
         let mainCoverArtVideoSize = Number(settings.getFieldValue("raccoonwheel-webm-position-left-size"));
         if (!mainCoverArtVideoSize) {
             mainCoverArtVideoSize = DEFAULT_VIDEO_SIZE;
@@ -198,7 +197,21 @@ async function createWebMVideo(): Promise<void> {
         const isBottomPosition = selectedPosition === "Bottom";
         
         const targetElementSelector = isBottomPosition ? SELECTORS.BOTTOM_PLAYER : SELECTORS.MAIN_COVER_ART;
-        const elementStyles = isBottomPosition ? STYLES.BOTTOM_PLAYER : STYLES.getMainCoverArt(mainCoverArtVideoSize);
+
+        let elementStyles;
+        if (isBottomPosition) {
+            elementStyles = STYLES.BOTTOM_PLAYER;
+        } else {
+             // For main position, try to get the container width
+             const mainCoverArtContainer = document.querySelector(SELECTORS.MAIN_COVER_ART_CONTAINER);
+             const containerWidth = mainCoverArtContainer ? mainCoverArtContainer.clientWidth : null;
+             // If we found the container width, use that (scaled by the size setting if needed, though usually just width is enough)
+             // The user requested to use the width of the container. 
+             // Note: clientWidth is a number (pixels).
+             const widthStyle = containerWidth ? `${containerWidth}px` : undefined;
+             elementStyles = STYLES.getMainCoverArt(mainCoverArtVideoSize, widthStyle);
+        }
+
         const targetElement = await waitForElement(targetElementSelector);
         
         let videoURL = String(settings.getFieldValue("raccoonwheel-webm-link"));
@@ -217,12 +230,19 @@ async function createWebMVideo(): Promise<void> {
 
         globalAudioData = await fetchAudioData();
         videoElement.playbackRate = await getPlaybackRate(globalAudioData);
+
+        // Remove any existing video element to avoid duplicates
+        // Check this AFTER waiting/fetching so we don't remove it while fetching
+        const existingVideo = document.getElementById(VIDEO_ELEMENT_ID);
+        if (existingVideo) {
+            existingVideo.remove();
+        }
         
         // Insert the video element into the target element in the DOM
         if (isBottomPosition) {
             const firstChild = targetElement.firstChild as Element | null;
             if (firstChild) {
-                firstChild.insertBefore(videoElement, firstChild.firstChild);
+                targetElement.insertBefore(videoElement, firstChild);
             }
         } else {
             targetElement.insertBefore(videoElement, targetElement.firstChild);
@@ -236,6 +256,8 @@ async function createWebMVideo(): Promise<void> {
         }
     } catch (error) {
         console.error("[Raccoon-Wheel] Could not create raccoon-wheel video element: ", error);
+    } finally {
+        isCreatingVideo = false;
     }
 }
 

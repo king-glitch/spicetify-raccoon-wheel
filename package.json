@@ -1,11 +1,13 @@
 {
   "name": "raccoon-wheel",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "scripts": {
-    "build": "spicetify-creator",
-    "build-local": "spicetify-creator --out=dist --minify",
-    "watch": "spicetify-creator --watch"
+    "build": "spicetify-creator --out=dist --minify",
+    "watch": "spicetify-creator --watch",
+    "apply": "spicetify config extensions raccoon-wheel.js && spicetify apply",
+    "push": "cp -r dist/raccoon-wheel.js ~/.config/spicetify/Extensions/",
+    "build-and-push": "bun run build && bun run push"
   },
   "license": "MIT",
   "devDependencies": {
