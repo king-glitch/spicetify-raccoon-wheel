@@ -1,156 +1,233 @@
 // This code is a copy of https://github.com/BlafKing/spicetify-cat-jam-synced but with some modifications to make it work with the Raccoon-Wheel extension
 import { SettingsSection } from "spcr-settings";
-const settings = new SettingsSection("Raccoon-Wheel Settings", "raccoonwheel-settings");
-let audioData;
 
-// Function to adjust the video playback rate based on the current track's BPM
-async function getPlaybackRate(audioData) {
+// ============================================================================
+// Types & Interfaces
+// ============================================================================
+
+interface Beat {
+    start: number;
+    duration: number;
+    confidence: number;
+}
+
+interface Track {
+    tempo: number;
+}
+
+interface AudioData {
+    track?: Track;
+    beats?: Beat[];
+}
+
+interface AudioFeatures {
+    danceability: number;
+    energy: number;
+}
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+const DEFAULT_VIDEO_BPM = 130;
+const DEFAULT_VIDEO_SIZE = 100;
+const DEFAULT_VIDEO_URL = "https://github.com/Nuzair46/spicetify-raccoon-wheel/raw/main/resources/pedro.webm";
+const VIDEO_ELEMENT_ID = "raccoonwheel-webm";
+
+const SELECTORS = {
+    BOTTOM_PLAYER: ".main-nowPlayingWidget-coverArt",
+    MAIN_COVER_ART: ".cover-art-auto-height",
+} as const;
+
+const STYLES = {
+    BOTTOM_PLAYER: "width: 56px; height: 56px; position: absolute; z-index: 10; pointer-events: none; left: 0;",
+    getMainCoverArt: (size: number) => `width: ${size}%; position: absolute; pointer-events: none; z-index: 10;`,
+} as const;
+
+// ============================================================================
+// Settings
+// ============================================================================
+
+const settings = new SettingsSection("Raccoon-Wheel Settings", "raccoonwheel-settings");
+let globalAudioData: AudioData | null = null;
+
+// ============================================================================
+// BPM & Playback Functions
+// ============================================================================
+
+/**
+ * Adjusts the video playback rate based on the current track's BPM
+ */
+async function getPlaybackRate(audioData: AudioData | null): Promise<number> {
     let videoDefaultBPM = Number(settings.getFieldValue("raccoonwheel-webm-bpm"));
     console.log(videoDefaultBPM);
     if (!videoDefaultBPM) {
-        videoDefaultBPM = 130
+        videoDefaultBPM = DEFAULT_VIDEO_BPM;
     }
 
-    if (audioData && audioData?.track) {
-        let trackBPM = audioData?.track?.tempo  // BPM of the current track
-        let bpmMethod = settings.getFieldValue("raccoonwheel-webm-bpm-method");
+    if (audioData?.track) {
+        const trackBPM = audioData.track.tempo;
+        const bpmMethod = settings.getFieldValue("raccoonwheel-webm-bpm-method");
         let bpmToUse = trackBPM;
+        
         if (bpmMethod !== "Track BPM") {
             console.log("[Raccoon-Wheel] Using danceability, energy and track BPM to calculate better BPM");
             bpmToUse = await getBetterBPM(trackBPM);
-            console.log("[Raccoon-Wheel] Better BPM:", bpmToUse)
+            console.log("[Raccoon-Wheel] Better BPM:", bpmToUse);
         }
+        
         let playbackRate = 1;
         if (bpmToUse) {
             playbackRate = bpmToUse / videoDefaultBPM;
         }
-        console.log("[Raccoon-Wheel] Track BPM:", trackBPM)
-        console.log("[Raccoon-Wheel] raccoon jam synchronized, playback rate set to:", playbackRate)
+        console.log("[Raccoon-Wheel] Track BPM:", trackBPM);
+        console.log("[Raccoon-Wheel] raccoon jam synchronized, playback rate set to:", playbackRate);
 
-        return playbackRate; // Return the calculated playback rate
+        return playbackRate;
     } else {
         console.warn("[Raccoon-Wheel] BPM data not available for this track, raccoon will not be jamming accurately :(");
-        return 1; // Return default playback rate if BPM data is not available
+        return 1;
     }
 }
 
-// Function that fetches audio data from "wg://audio-attributes/v1/audio-analysis/" with retry handling
-async function fetchAudioData(retryDelay = 200, maxRetries = 10) {
+/**
+ * Fetches audio data from Spicetify API with retry handling
+ */
+async function fetchAudioData(retryDelay = 200, maxRetries = 10): Promise<AudioData | null> {
     try {
-        let audioData = await Spicetify.getAudioData();
+        const audioData: AudioData = await Spicetify.getAudioData();
         return audioData;
-    } catch (error) {
-        if (typeof error === "object" && error !== null && 'message' in error) {
+    } catch (error: unknown) {
+        if (error instanceof Error) {
             const message = error.message;
             
             if (message.includes("Cannot read properties of undefined") && maxRetries > 0) {
                 console.log("[Raccoon-Wheel] Retrying to fetch audio data...");
                 await new Promise(resolve => setTimeout(resolve, retryDelay));
-                return fetchAudioData(retryDelay, maxRetries - 1); // Retry fetching audio data
+                return fetchAudioData(retryDelay, maxRetries - 1);
             }
         } else {
             console.warn(`[Raccoon-Wheel] Error fetching audio data: ${error}`);
         }
-        return null; // Return default playback rate on failure
+        return null;
     }
 }
 
-// Function to synchronize video playback timing with the music's beats
-async function syncTiming(startTime, progress) {
-    const videoElement = document.getElementById('raccoonwheel-webm') as HTMLVideoElement;
+// ============================================================================
+// Video Sync Functions
+// ============================================================================
+
+/**
+ * Synchronizes video playback timing with the music's beats
+ */
+async function syncTiming(startTime: number, progress: number): Promise<void> {
+    const videoElement = document.getElementById(VIDEO_ELEMENT_ID) as HTMLVideoElement | null;
     if (videoElement) {
         if (Spicetify.Player.isPlaying()) {
-            progress = progress / 1000; // Convert progress from milliseconds to seconds
+            const progressInSeconds = progress / 1000;
 
-            if (audioData && audioData.beats) {
-                // Find the nearest upcoming beat based on current progress
-                const upcomingBeat = audioData.beats.find(beat => beat.start > progress);
+            if (globalAudioData?.beats) {
+                const upcomingBeat = globalAudioData.beats.find((beat: Beat) => beat.start > progressInSeconds);
                 if (upcomingBeat) {
-                    const operationTime = performance.now() - startTime; // Time taken for the operation
-                    const delayUntilNextBeat = Math.max(0, (upcomingBeat.start - progress) * 1000 - operationTime); // Calculate delay until the next beat
+                    const operationTime = performance.now() - startTime;
+                    const delayUntilNextBeat = Math.max(0, (upcomingBeat.start - progressInSeconds) * 1000 - operationTime);
                     
                     setTimeout(() => {
-                        videoElement.currentTime = 0; // Reset video to start
-                        videoElement.play(); // Play the video
+                        videoElement.currentTime = 0;
+                        videoElement.play();
                     }, delayUntilNextBeat);
                 } else {
-                    videoElement.currentTime = 0; // Reset video to start if no upcoming beat
+                    videoElement.currentTime = 0;
                     videoElement.play();
                 }
                 console.log("[Raccoon-Wheel] Resynchronized to nearest beat");
             } else {
-                videoElement.currentTime = 0; // Play the video without delay if no beat information
+                videoElement.currentTime = 0;
                 videoElement.play();
             }
         } else {
-            videoElement.pause(); // Pause the video if Spotify is not playing
+            videoElement.pause();
         }
     } else {
-        createWebMVideo(); // Create a new video element if the current one is not found
+        createWebMVideo();
         console.error("[Raccoon-Wheel] Video element not found. Recreating...");
     }
 }
 
-// Function to wait for a specific DOM element to appear before proceeding
-async function waitForElement(selector, maxAttempts = 50, interval = 100) {
+// ============================================================================
+// DOM Utilities
+// ============================================================================
+
+/**
+ * Waits for a specific DOM element to appear before proceeding
+ */
+async function waitForElement(selector: string, maxAttempts = 50, interval = 100): Promise<Element> {
     let attempts = 0;
     while (attempts < maxAttempts) {
-        const element = document.querySelector(selector); // Attempt to find the element
+        const element = document.querySelector(selector);
         if (element) {
-            return element; // Return the element if found
+            return element;
         }
-        await new Promise(resolve => setTimeout(resolve, interval)); // Wait for a specified interval before trying again
+        await new Promise(resolve => setTimeout(resolve, interval));
         attempts++;
     }
-    throw new Error(`Element ${selector} not found after ${maxAttempts} attempts.`); // Throw error if element not found within attempts
+    throw new Error(`Element ${selector} not found after ${maxAttempts} attempts.`);
 }
 
-// Function that creates the WebM video and sets initial BPM and play state
-async function createWebMVideo() {
+// ============================================================================
+// Video Creation
+// ============================================================================
+
+/**
+ * Creates the WebM video element and sets initial BPM and play state
+ */
+async function createWebMVideo(): Promise<void> {
     try {
         // Remove any existing video element to avoid duplicates
-        const existingVideo = document.getElementById('raccoonwheel-webm');
+        const existingVideo = document.getElementById(VIDEO_ELEMENT_ID);
         if (existingVideo) {
             existingVideo.remove();
         }
-        const bottomPlayerClass = '.main-nowPlayingWidget-coverArt' // Selector for the bottom player
-        const mainCoverArtClass = '.cover-art-auto-height' // Selector for covert art
-        let mainCoverArtVideoSize = Number(settings.getFieldValue("raccoonwheel-webm-position-left-size")); // Get the left library video size
+        
+        let mainCoverArtVideoSize = Number(settings.getFieldValue("raccoonwheel-webm-position-left-size"));
         if (!mainCoverArtVideoSize) {
-            mainCoverArtVideoSize = 100; // Default size of the video on the left library
+            mainCoverArtVideoSize = DEFAULT_VIDEO_SIZE;
         }
-        const bottomPlayerStyle = 'width: 56px; height: 56px; position: absolute; z-index: 10;  pointer-events: none; left: 0;'; // Style for the bottom player video
-        let mainCoverArtStyle = `width: ${mainCoverArtVideoSize}%; position: absolute; pointer-events: none; z-index: 10;` // Style for the left library video
-        let selectedPosition = settings.getFieldValue("raccoonwheel-webm-position"); // Get the selected position for the video
-
-        let targetElementSelector = selectedPosition === 'Bottom' ? bottomPlayerClass : mainCoverArtClass;
-        let elementStyles = selectedPosition === 'Bottom' ? bottomPlayerStyle : mainCoverArtStyle;
-        const targetElement = await waitForElement(targetElementSelector); // Wait until the target element is available
+        
+        const selectedPosition = settings.getFieldValue("raccoonwheel-webm-position");
+        const isBottomPosition = selectedPosition === "Bottom";
+        
+        const targetElementSelector = isBottomPosition ? SELECTORS.BOTTOM_PLAYER : SELECTORS.MAIN_COVER_ART;
+        const elementStyles = isBottomPosition ? STYLES.BOTTOM_PLAYER : STYLES.getMainCoverArt(mainCoverArtVideoSize);
+        const targetElement = await waitForElement(targetElementSelector);
         
         let videoURL = String(settings.getFieldValue("raccoonwheel-webm-link"));
-        
         if (!videoURL) {
-            videoURL = "https://github.com/Nuzair46/spicetify-raccoon-wheel/raw/main/resources/pedro.webm"
+            videoURL = DEFAULT_VIDEO_URL;
         }
 
         // Create a new video element to be inserted
-        const videoElement = document.createElement('video');
-        videoElement.setAttribute('loop', 'true'); // Video loops continuously
-        videoElement.setAttribute('autoplay', 'true'); // Video starts automatically
-        videoElement.setAttribute('muted', 'true'); // Video is muted
-        videoElement.src = videoURL; // Set the source of the video
-        videoElement.id = 'raccoonwheel-webm'; // Assign an ID to the video element
+        const videoElement = document.createElement("video");
+        videoElement.setAttribute("loop", "true");
+        videoElement.setAttribute("autoplay", "true");
+        videoElement.setAttribute("muted", "true");
+        videoElement.src = videoURL;
+        videoElement.id = VIDEO_ELEMENT_ID;
         videoElement.style.cssText = elementStyles;
 
-        audioData = await fetchAudioData(); // Fetch audio data
-        videoElement.playbackRate = await getPlaybackRate(audioData); // Adjust playback rate based on the song's BPM
+        globalAudioData = await fetchAudioData();
+        videoElement.playbackRate = await getPlaybackRate(globalAudioData);
+        
         // Insert the video element into the target element in the DOM
-        if (selectedPosition === 'Bottom') {
-            const firstChild = targetElement.firstChild
-            firstChild.insertBefore(videoElement, firstChild.firstChild);
+        if (isBottomPosition) {
+            const firstChild = targetElement.firstChild as Element | null;
+            if (firstChild) {
+                firstChild.insertBefore(videoElement, firstChild.firstChild);
+            }
         } else {
             targetElement.insertBefore(videoElement, targetElement.firstChild);
         }
+        
         // Control video playback based on whether Spotify is currently playing music
         if (Spicetify.Player.isPlaying()) {
             videoElement.play();
@@ -162,60 +239,68 @@ async function createWebMVideo() {
     }
 }
 
-async function getBetterBPM(currentBPM) {
-    let betterBPM = currentBPM
+// ============================================================================
+// BPM Calculation
+// ============================================================================
+
+/**
+ * Gets a better BPM based on track audio features
+ */
+async function getBetterBPM(currentBPM: number): Promise<number> {
+    let betterBPM = currentBPM;
     try {
         const currentSongDataUri = Spicetify.Player.data?.item?.uri;
         if (!currentSongDataUri) {
-            setTimeout(getBetterBPM, 200);
-            return;
+            return currentBPM;
         }
         const uriFinal = currentSongDataUri.split(":")[2];
-        const res = await Spicetify.CosmosAsync.get("https://api.spotify.com/v1/audio-features/" + uriFinal);
+        const res: AudioFeatures = await Spicetify.CosmosAsync.get("https://api.spotify.com/v1/audio-features/" + uriFinal);
         const danceability = Math.round(100 * res.danceability);
         const energy = Math.round(100 * res.energy);
-        betterBPM = calculateBetterBPM(danceability, energy, currentBPM)
+        betterBPM = calculateBetterBPM(danceability, energy, currentBPM);
     } catch (error) {
         console.error("[Raccoon-Wheel] Could not get audio features: ", error);
-    } finally {
-        return betterBPM;
     }
+    return betterBPM;
 }
 
-// Function to calculate a better BPM based on danceability and energy
-function calculateBetterBPM(danceability, energy, currentBPM) {
+/**
+ * Calculates a better BPM based on danceability, energy, and current BPM
+ */
+function calculateBetterBPM(danceability: number, energy: number, currentBPM: number): number {
     let danceabilityWeight = 0.9;
     let energyWeight = 0.6;
     let bpmWeight = 0.6;
-    const energyTreshold = 0.5;
-    let danceabilityTreshold = 0.5;
+    const energyThreshold = 0.5;
+    const danceabilityThreshold = 0.5;
     const maxBPM = 100;
-    let bpmThreshold = 0.8; // 80 bpm
+    const bpmThreshold = 0.8; // 80 bpm
 
     const normalizedBPM = currentBPM / 100;
     const normalizedDanceability = danceability / 100;
     const normalizedEnergy = energy / 100;
 
-    if (normalizedDanceability < danceabilityTreshold){
+    if (normalizedDanceability < danceabilityThreshold) {
         danceabilityWeight *= normalizedDanceability;
     }
 
-    if (normalizedEnergy < energyTreshold){
+    if (normalizedEnergy < energyThreshold) {
         energyWeight *= normalizedEnergy;
     }
-    // increase bpm weight if the song is slow
-    if (normalizedBPM < bpmThreshold){
+    
+    // Increase bpm weight if the song is slow
+    if (normalizedBPM < bpmThreshold) {
         bpmWeight = 0.9;
     }
 
     const weightedAverage = (normalizedDanceability * danceabilityWeight + normalizedEnergy * energyWeight + normalizedBPM * bpmWeight) / (1 - danceabilityWeight + 1 - energyWeight + bpmWeight);
     let betterBPM = weightedAverage * maxBPM;
 
-    console.log({danceabilityWeight, energyWeight, currentBPM, weightedAverage, betterBPM, bpmWeight})
+    console.log({ danceabilityWeight, energyWeight, currentBPM, weightedAverage, betterBPM, bpmWeight });
 
     const betterBPMForFasterSongs = settings.getFieldValue("raccoonwheel-webm-bpm-method-faster-songs") !== "Track BPM";
     if (betterBPM > currentBPM) {
-        if (betterBPMForFasterSongs){
+        if (betterBPMForFasterSongs) {
             betterBPM = (betterBPM + currentBPM) / 2;
         } else {
             betterBPM = currentBPM;
@@ -229,78 +314,84 @@ function calculateBetterBPM(danceability, energy, currentBPM) {
     return betterBPM;
 }
 
-// Main function to initialize and manage the Spicetify app extension
-async function main() {
+// ============================================================================
+// Main Entry Point
+// ============================================================================
+
+/**
+ * Initializes and manages the Spicetify app extension
+ */
+async function main(): Promise<void> {
     // Continuously check until the Spicetify Player and audio data APIs are available
     while (!Spicetify?.Player?.addEventListener || !Spicetify?.getAudioData) {
-        await new Promise(resolve => setTimeout(resolve, 100)); // Wait for 100ms before checking again
+        await new Promise(resolve => setTimeout(resolve, 100));
     }
     console.log("[Raccoon-Wheel] Extension loaded.");
-    let audioData; // Initialize audio data variable
 
     // Create Settings UI
     settings.addInput("raccoonwheel-webm-link", "Custom webM video URL (Link does not work if no video shows)", "");
     settings.addInput("raccoonwheel-webm-bpm", "Custom default BPM of webM video (Example: 213)", "");
-    settings.addDropDown("raccoonwheel-webm-position", "Position where webM video should be rendered", ['Bottom', 'Main'], 1);
-    settings.addDropDown("raccoonwheel-webm-bpm-method", "Method to calculate better BPM for slower songs", ['Track BPM', 'Danceability, Energy and Track BPM'], 1);
-    settings.addDropDown("raccoonwheel-webm-bpm-method-faster-songs", "Method to calculate better BPM for faster songs", ['Track BPM', 'Danceability, Energy and Track BPM'], 1);
+    settings.addDropDown("raccoonwheel-webm-position", "Position where webM video should be rendered", ["Bottom", "Main"], 1);
+    settings.addDropDown("raccoonwheel-webm-bpm-method", "Method to calculate better BPM for slower songs", ["Track BPM", "Danceability, Energy and Track BPM"], 1);
+    settings.addDropDown("raccoonwheel-webm-bpm-method-faster-songs", "Method to calculate better BPM for faster songs", ["Track BPM", "Danceability, Energy and Track BPM"], 1);
     settings.addInput("raccoonwheel-webm-position-left-size", "Size of webM video on the left library (Only works for left library, Default: 100)", "");
-    settings.addButton("raccoonwheel-reload", "Reload custom values", "Save and reload", () => {createWebMVideo();});
+    settings.addButton("raccoonwheel-reload", "Reload custom values", "Save and reload", () => { createWebMVideo(); });
     settings.pushSettings();
 
     // Create initial WebM video
     createWebMVideo();
 
+    let lastProgress = 0;
+
     Spicetify.Player.addEventListener("onplaypause", async () => {
         const startTime = performance.now();
-        let progress = Spicetify.Player.getProgress();
+        const progress = Spicetify.Player.getProgress();
         lastProgress = progress;
-        syncTiming(startTime, progress); // Synchronize video timing with the current progress
+        syncTiming(startTime, progress);
     });
-    
-    let lastProgress = 0; // Initialize last known progress
+
     Spicetify.Player.addEventListener("onprogress", async () => {
         const currentTime = performance.now();
-        let progress = Spicetify.Player.getProgress();
+        const progress = Spicetify.Player.getProgress();
         
-        // Check if a significant skip in progress has occurred or if a significant time has passed
+        // Check if a significant skip in progress has occurred
         if (Math.abs(progress - lastProgress) >= 500) {
-            syncTiming(currentTime, progress); // Synchronize video timing again
+            syncTiming(currentTime, progress);
         }
-        lastProgress = progress; // Update last known progress
+        lastProgress = progress;
     });
 
     Spicetify.Player.addEventListener("songchange", async () => {
-        const startTime = performance.now(); // Record the start time for the operation
+        const startTime = performance.now();
         lastProgress = Spicetify.Player.getProgress();
 
-        const videoElement = document.getElementById('raccoonwheel-webm')as HTMLVideoElement;
+        const videoElement = document.getElementById(VIDEO_ELEMENT_ID) as HTMLVideoElement | null;
         if (videoElement) {
-            audioData = await fetchAudioData(); // Fetch current audio data
-            console.log("[Raccoon-Wheel] Audio data fetched:", audioData);
-            if (audioData && audioData.beats && audioData.beats.length > 0) {
-                const firstBeatStart = audioData.beats[0].start; // Get start time of the first beat
+            globalAudioData = await fetchAudioData();
+            console.log("[Raccoon-Wheel] Audio data fetched:", globalAudioData);
+            
+            if (globalAudioData?.beats && globalAudioData.beats.length > 0) {
+                const firstBeatStart = globalAudioData.beats[0].start;
                 
-                // Adjust video playback rate based on the song's BPM
-                videoElement.playbackRate = await getPlaybackRate(audioData);
-    
-                const operationTime = performance.now() - startTime; // Calculate time taken for operations
-                const delayUntilFirstBeat = Math.max(0, firstBeatStart * 1000 - operationTime); // Calculate delay until the first beat
-    
+                videoElement.playbackRate = await getPlaybackRate(globalAudioData);
+
+                const operationTime = performance.now() - startTime;
+                const delayUntilFirstBeat = Math.max(0, firstBeatStart * 1000 - operationTime);
+
                 setTimeout(() => {
-                    videoElement.currentTime = 0; // Ensure video starts from the beginning
-                    videoElement.play(); // Play the video
+                    videoElement.currentTime = 0;
+                    videoElement.play();
                 }, delayUntilFirstBeat);
             } else {
-                videoElement.playbackRate = await getPlaybackRate(audioData); // Set playback rate even if no beat information
-                videoElement.currentTime = 0; // Ensure video starts from the beginning
-                videoElement.play(); // Play the video
+                videoElement.playbackRate = await getPlaybackRate(globalAudioData);
+                videoElement.currentTime = 0;
+                videoElement.play();
             }
         } else {
-            createWebMVideo(); // Create a new video element if the current one is not found
+            createWebMVideo();
             console.error("[Raccoon-Wheel] Video element not found. Recreating...");
         }
     });
 }
 
-export default main; // Export the main function for use in the application
+export default main;
