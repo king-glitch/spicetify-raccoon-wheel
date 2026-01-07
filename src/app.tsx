@@ -186,10 +186,11 @@ function calculateDynamicPlaybackRate(
                     currentSection.loudness - audioData.track.loudness;
 
                 // For every 1dB louder than average, increase speed
-                // Increased sensitivity to 0.15 (was 0.08)
+                // Asymmetric: Boost aggressively (up to +0.6), but punish gently (max -0.15)
+                // This prevents the video from stalling during verses/intros
                 loudnessMultiplier += Math.max(
-                    -0.5,
-                    Math.min(0.5, sectionLoudnessDiff * 0.15)
+                    -0.15,
+                    Math.min(0.6, sectionLoudnessDiff * 0.15)
                 );
             }
         }
@@ -210,16 +211,18 @@ function calculateDynamicPlaybackRate(
                     currentSegment.loudness_max - audioData.track.loudness;
 
                 // Apply a modulation for segments to add "texture" to the speed
-                // Increased sensitivity to 0.10 (was 0.02) to make it punchier
+                // Asymmetric: Punchy hits (up to +0.4), minimal drag on soft notes (max -0.1)
                 loudnessMultiplier += Math.max(
-                    -0.3,
-                    Math.min(0.3, segmentLoudnessDiff * 0.10)
+                    -0.1,
+                    Math.min(0.4, segmentLoudnessDiff * 0.12)
                 );
             }
         }
     }
 
     // Apply the combined loudness multiplier
+    // Safety floor: Never drop global multiplier below 0.65 due to loudness alone
+    loudnessMultiplier = Math.max(0.65, loudnessMultiplier);
     playbackRate *= loudnessMultiplier;
 
     // Position within the beat for micro-variations
