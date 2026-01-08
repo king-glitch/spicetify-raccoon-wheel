@@ -21,6 +21,7 @@ const VIDEO_OPTIONS = {
     Husky: "https://github.com/king-glitch/spicetify-raccoon-wheel/raw/main/resources/husky.webm",
     Pedro: "https://github.com/king-glitch/spicetify-raccoon-wheel/raw/main/resources/pedro.webm",
     Chika: "https://github.com/king-glitch/spicetify-raccoon-wheel/raw/main/resources/chika.webm",
+    Trump: "https://github.com/king-glitch/spicetify-raccoon-wheel/raw/main/resources/trump.webm",
     Custom: "custom",
 } as const;
 
